@@ -327,6 +327,7 @@ class OllamaProvider(LLMProvider):
         question: str,
         response: str,
         temperature: float = 0.0,
+        max_retries: int = 3,
     ) -> dict:
         """Use the LLM as a judge to evaluate a response."""
         eval_prompt = EVALUATION_PROMPT.format(
@@ -338,48 +339,104 @@ class OllamaProvider(LLMProvider):
             f"evaluate_response model={self._model} temp={temperature} prompt_len={len(eval_prompt)}"
         )
 
-        result = self._client.generate(
-            model=self._model,
-            prompt=eval_prompt,
-            stream=False,
-            options={
-                "temperature": temperature,
-                "num_predict": 500,
-            },
-            format="json",  # Request JSON output
-        )
+        last_error = None
+        for attempt in range(max_retries):
+            try:
+                # Try with format="json" first
+                result = self._client.generate(
+                    model=self._model,
+                    prompt=eval_prompt,
+                    stream=False,
+                    options={
+                        "temperature": temperature,
+                        "num_predict": 500,
+                    },
+                    format="json",
+                )
 
-        # Parse the JSON response
-        try:
-            ratings = json.loads(self._extract_text(result) or "")
-            self._debug_log(
-                f"evaluate_response parsed ratings keys={list(ratings.keys())} "
-                f"raw_snippet={self._truncate(self._extract_text(result))}"
-            )
-            # Ensure all required fields are present
-            required = [
-                "thoroughness", "accuracy", "insight", "clarity",
-                "engagement", "nuance", "usefulness", "brief_justification"
-            ]
-            for field in required:
-                if field not in ratings:
-                    if field == "brief_justification":
-                        ratings[field] = ""
-                    else:
-                        ratings[field] = 4  # Default to middle rating
-            return ratings
-        except (json.JSONDecodeError, KeyError) as e:
-            # Return default ratings if parsing fails
-            return {
-                "thoroughness": 4,
-                "accuracy": 4,
-                "insight": 4,
-                "clarity": 4,
-                "engagement": 4,
-                "nuance": 4,
-                "usefulness": 4,
-                "brief_justification": f"Parse error: {e}",
-            }
+                raw_text = self._extract_text(result)
+                self._debug_log(
+                    f"evaluate_response attempt={attempt+1} raw_len={len(raw_text or '')} "
+                    f"snippet={self._truncate(raw_text)}"
+                )
+
+                # If empty, try without format="json" (some models don't support it)
+                if not raw_text or not raw_text.strip():
+                    self._debug_log("Empty response with format=json, retrying without format constraint")
+                    result = self._client.generate(
+                        model=self._model,
+                        prompt=eval_prompt,
+                        stream=False,
+                        options={
+                            "temperature": temperature,
+                            "num_predict": 500,
+                        },
+                    )
+                    raw_text = self._extract_text(result)
+                    self._debug_log(
+                        f"evaluate_response retry without format: raw_len={len(raw_text or '')} "
+                        f"snippet={self._truncate(raw_text)}"
+                    )
+
+                if not raw_text or not raw_text.strip():
+                    last_error = "Empty response from model"
+                    continue
+
+                # Try to extract JSON from the response (model might include extra text)
+                json_text = raw_text.strip()
+                # Look for JSON object in the response
+                if not json_text.startswith("{"):
+                    # Try to find JSON in the text
+                    start_idx = json_text.find("{")
+                    end_idx = json_text.rfind("}") + 1
+                    if start_idx != -1 and end_idx > start_idx:
+                        json_text = json_text[start_idx:end_idx]
+
+                ratings = json.loads(json_text)
+                self._debug_log(
+                    f"evaluate_response parsed ratings keys={list(ratings.keys())}"
+                )
+
+                # Ensure all required fields are present
+                required = [
+                    "thoroughness", "accuracy", "insight", "clarity",
+                    "engagement", "nuance", "usefulness", "brief_justification"
+                ]
+                for field in required:
+                    if field not in ratings:
+                        if field == "brief_justification":
+                            ratings[field] = ""
+                        else:
+                            ratings[field] = 4  # Default to middle rating
+
+                # Validate ratings are in range 1-7
+                for field in required:
+                    if field != "brief_justification":
+                        val = ratings[field]
+                        if not isinstance(val, (int, float)) or val < 1 or val > 7:
+                            ratings[field] = 4
+
+                return ratings
+
+            except json.JSONDecodeError as e:
+                last_error = f"JSON parse error: {e}"
+                self._debug_log(f"evaluate_response attempt={attempt+1} failed: {last_error}")
+            except Exception as e:
+                last_error = f"Error: {e}"
+                self._debug_log(f"evaluate_response attempt={attempt+1} failed: {last_error}")
+
+        # Return default ratings if all retries failed
+        self._debug_log(f"evaluate_response all {max_retries} attempts failed, returning defaults")
+        return {
+            "thoroughness": 4,
+            "accuracy": 4,
+            "insight": 4,
+            "clarity": 4,
+            "engagement": 4,
+            "nuance": 4,
+            "usefulness": 4,
+            "brief_justification": f"Evaluation failed after {max_retries} attempts: {last_error}",
+        }
 
     def count_tokens(self, text: str) -> int:
         """

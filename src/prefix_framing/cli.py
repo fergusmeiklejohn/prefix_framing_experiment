@@ -23,10 +23,10 @@ def run_pilot():
         help="Number of prompts to use (default: 5)",
     )
     parser.add_argument(
-        "--prefixes", "-x",
+        "--prefixes-per-category", "-x",
         type=int,
-        default=5,
-        help="Number of prefixes to use (default: 5)",
+        default=1,
+        help="Number of prefixes per category (default: 1, covers all 5 categories)",
     )
     parser.add_argument(
         "--replications", "-r",
@@ -49,19 +49,24 @@ def run_pilot():
 
     from .runner import run_pilot as _run_pilot
 
+    num_categories = 5  # emotional_positive, emotional_negative, cognitive, epistemic, control
+    total_prefixes = args.prefixes_per_category * num_categories
+
     console.print(f"[bold]Starting Pilot Experiment[/bold]")
     console.print(f"Model: {args.model}")
     console.print(f"Prompts: {args.prompts}")
-    console.print(f"Prefixes: {args.prefixes}")
+    console.print(f"Prefixes per category: {args.prefixes_per_category}")
+    console.print(f"Total prefixes (across {num_categories} categories): {total_prefixes}")
     console.print(f"Replications: {args.replications}")
-    console.print(f"Total trials: {args.prompts * args.prefixes * args.replications}")
+    console.print(f"Total trials: {args.prompts * total_prefixes * args.replications}")
     console.print()
+    console.print("[bold]Selecting prefixes from each category:[/bold]")
 
     try:
         experiment_id = _run_pilot(
             model=args.model,
             num_prompts=args.prompts,
-            num_prefixes=args.prefixes,
+            num_prefixes_per_category=args.prefixes_per_category,
             replications=args.replications,
             db_path=args.db,
             run_evaluations=not args.no_eval,

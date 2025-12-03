@@ -248,7 +248,7 @@ class ExperimentRunner:
 def run_pilot(
     model: str = "llama3.2",
     num_prompts: int = 5,
-    num_prefixes: int = 5,
+    num_prefixes_per_category: int = 1,
     replications: int = 10,
     db_path: str = "results/pilot.db",
     run_evaluations: bool = True,
@@ -256,10 +256,13 @@ def run_pilot(
     """
     Run a small pilot experiment.
 
+    Selects prefixes from ALL categories to ensure proper experimental design
+    with control conditions for valid comparisons.
+
     Args:
         model: Ollama model name
         num_prompts: Number of prompts to use
-        num_prefixes: Number of prefixes to use
+        num_prefixes_per_category: Number of prefixes per category (default: 1)
         replications: Replications per condition
         db_path: Path to database file
         run_evaluations: Whether to run LLM-as-judge
@@ -268,10 +271,20 @@ def run_pilot(
         experiment_id
     """
     from .providers.ollama import OllamaProvider
+    from .models import PrefixCategory
 
-    # Select subset of prompts and prefixes
+    # Select subset of prompts
     prompt_ids = [p.id for p in PROMPTS[:num_prompts]]
-    prefix_ids = [p.id for p in PREFIXES[:num_prefixes]]
+
+    # Select prefixes from EACH category to ensure balanced design with control
+    prefix_ids = []
+    for category in PrefixCategory:
+        category_prefixes = [p for p in PREFIXES if p.category == category]
+        selected = category_prefixes[:num_prefixes_per_category]
+        prefix_ids.extend([p.id for p in selected])
+        console.print(f"  {category.value}: {[p.id for p in selected]}")
+
+    console.print(f"\n[bold]Selected {len(prefix_ids)} prefixes across all categories[/bold]")
 
     config = ExperimentConfig(
         name="Pilot Experiment",

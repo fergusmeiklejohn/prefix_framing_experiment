@@ -100,8 +100,22 @@ def compute_effect_sizes(
     if metric_cols is None:
         metric_cols = [c for c in df.columns if c.startswith("m_") or c.startswith("j_")]
 
-    baseline = df[df["prefix_category"] == baseline_category]
     categories = df["prefix_category"].unique()
+
+    # Check if baseline exists
+    if baseline_category not in categories:
+        print(f"\n[WARNING] No '{baseline_category}' category found in data!")
+        print(f"  Available categories: {list(categories)}")
+        print(f"  Effect sizes cannot be computed without a baseline.")
+        print(f"  Consider re-running the experiment with control prefixes (D1, D2).\n")
+        return pd.DataFrame(columns=["category"])
+
+    baseline = df[df["prefix_category"] == baseline_category]
+
+    if len(baseline) < 2:
+        print(f"\n[WARNING] Baseline category '{baseline_category}' has only {len(baseline)} trial(s).")
+        print(f"  Need at least 2 trials for effect size calculation.\n")
+        return pd.DataFrame(columns=["category"])
 
     results = []
     for category in categories:
@@ -337,6 +351,41 @@ def generate_report(
         return
 
     print(f"Loaded {len(df)} trials")
+
+    # Validate experimental design
+    categories = df["prefix_category"].unique()
+    print(f"Prefix categories in data: {list(categories)}")
+
+    if "control" not in categories:
+        print("\n" + "="*60)
+        print("[WARNING] NO CONTROL CONDITION FOUND")
+        print("="*60)
+        print("Effect sizes require a control/baseline condition.")
+        print("Your experiment only includes:", list(categories))
+        print("="*60 + "\n")
+
+    # Check for judge rating issues
+    judge_cols = [c for c in df.columns if c.startswith("j_") and c != "j_brief_justification"]
+    if judge_cols:
+        # Check if all ratings are identical (indicates evaluation failure)
+        all_same = True
+        for col in judge_cols:
+            if df[col].nunique() > 1:
+                all_same = False
+                break
+
+        if all_same and len(df) > 10:
+            print("\n" + "="*60)
+            print("[WARNING] ALL JUDGE RATINGS ARE IDENTICAL")
+            print("="*60)
+            print("This usually indicates the LLM-as-judge evaluation failed.")
+            print("All ratings defaulted to the same value (likely 4).")
+            print("Judge ratings in this analysis are NOT meaningful.")
+            print("Consider: ")
+            print("  - Using a different model for evaluation")
+            print("  - Running with PF_OLLAMA_DEBUG=1 to diagnose")
+            print("  - Re-running with --no-eval and manual evaluation")
+            print("="*60 + "\n")
 
     # Summary stats
     summary = compute_summary_stats(df)
