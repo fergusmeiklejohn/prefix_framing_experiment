@@ -2,6 +2,7 @@
 
 import json
 import time
+import os
 from typing import Optional
 
 import ollama
@@ -47,6 +48,7 @@ class OllamaProvider(LLMProvider):
         """
         self._model = model
         self._client = ollama.Client(host=host) if host else ollama.Client()
+        self._debug = os.getenv("PF_OLLAMA_DEBUG", "").lower() in {"1", "true", "yes", "debug"}
 
         # Verify model is available
         try:
@@ -57,6 +59,128 @@ class OllamaProvider(LLMProvider):
                 f"Model '{model}' not found. Available models: {available}. "
                 f"Pull it with: ollama pull {model}"
             )
+
+    def _debug_log(self, msg: str):
+        if self._debug:
+            print(f"[ollama-debug] {msg}", flush=True)
+
+    @staticmethod
+    def _truncate(text: str, limit: int = 400) -> str:
+        if text is None:
+            return ""
+        if len(text) <= limit:
+            return text
+        return text[:limit] + "... [truncated]"
+
+    def _build_prefilled_prompt(self, prompt: str, prefix: str) -> str:
+        """
+        Build a single-turn prompt that forces the assistant to start with the prefix.
+
+        Using the /api/generate endpoint keeps us compatible with models like gpt-oss
+        that don't reliably handle the chat API.
+        """
+        if prefix:
+            return (
+                "You are answering the question below. Begin your answer exactly with the provided "
+                "prefix, then continue naturally.\n\n"
+                f"Question:\n{prompt}\n\n"
+                f"Prefix:\n{prefix}\n\n"
+                f"Answer starting with the prefix:\n{prefix}"
+            )
+        # No prefix: simple instruction to answer the question
+        return f"{prompt}\n\nAnswer:"
+
+    @staticmethod
+    def _extract_text(response) -> str:
+        """Normalize text extraction from Ollama generate/chat responses."""
+        if response is None:
+            return ""
+
+        # Dict-like responses
+        if isinstance(response, dict):
+            if "response" in response:
+                return response.get("response") or ""
+            if "content" in response:
+                return response.get("content") or ""
+            if "message" in response and isinstance(response["message"], dict):
+                return response["message"].get("content") or ""
+            if "choices" in response and response["choices"]:
+                choice = response["choices"][0]
+                if isinstance(choice, dict):
+                    return choice.get("content") or choice.get("text") or ""
+            return ""
+
+        # Pydantic response objects (GenerateResponse/ChatResponse)
+        text = getattr(response, "response", None)
+        if not text and hasattr(response, "message"):
+            message = getattr(response, "message")
+            text = getattr(message, "content", None) or ""
+        # Some integrations may expose .content directly
+        if not text and hasattr(response, "content"):
+            text = getattr(response, "content")
+        return text or ""
+
+    @staticmethod
+    def _get_token_counts(response) -> tuple[int, int]:
+        """Extract token usage fields from either dict or response object."""
+        def _grab(obj, key):
+            if isinstance(obj, dict):
+                return obj.get(key, 0) or 0
+            return getattr(obj, key, 0) or 0
+
+        return _grab(response, "prompt_eval_count"), _grab(response, "eval_count")
+
+    def _describe_response(self, resp):
+        """Summarize response shape for debugging."""
+        if resp is None:
+            return "None"
+        if isinstance(resp, dict):
+            keys = list(resp.keys())
+            return (
+                f"dict keys={keys} "
+                f"done_reason={resp.get('done_reason')} "
+                f"eval_count={resp.get('eval_count')} "
+                f"prompt_eval_count={resp.get('prompt_eval_count')}"
+            )
+        attrs = {k: getattr(resp, k, None) for k in [
+            "done_reason", "eval_count", "prompt_eval_count", "response"
+        ]}
+        attrs["message_has_content"] = bool(
+            getattr(getattr(resp, "message", None), "content", None)
+        )
+        return f"{resp.__class__.__name__} attrs={attrs}"
+
+    def _stream_generate(self, prompt: str, temperature: float, max_tokens: int):
+        """
+        Stream generation and accumulate text.
+
+        Some models (e.g., gpt-oss) occasionally return empty responses when
+        called with stream=False. Streaming avoids that edge case.
+        """
+        chunks = self._client.generate(
+            model=self._model,
+            prompt=prompt,
+            stream=True,
+            options={
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        )
+
+        full_text = []
+        last_chunk = None
+        for chunk in chunks:
+            last_chunk = chunk
+            if self._debug:
+                self._debug_log(
+                    f"stream chunk: {self._describe_response(chunk)} "
+                    f"snippet={self._truncate(self._extract_text(chunk))}"
+                )
+            piece = self._extract_text(chunk)
+            if piece:
+                full_text.append(piece)
+
+        return "".join(full_text), (last_chunk or {})
 
     @property
     def model_name(self) -> str:
@@ -72,50 +196,127 @@ class OllamaProvider(LLMProvider):
         """
         Generate a response with a forced prefix.
 
-        Ollama's chat API doesn't directly support assistant prefill like Anthropic's,
-        so we use a workaround: include the prefix as a partial assistant message
-        and instruct the model to continue.
+        Uses the /api/generate endpoint so models that don't fully support chat
+        (e.g., gpt-oss) still return a continuation.
         """
         start_time = time.time()
 
-        # Build messages
-        messages = [{"role": "user", "content": prompt}]
+        # First attempt: /api/generate with a prefilled prompt
+        prompt_text = self._build_prefilled_prompt(prompt, prefix)
 
-        if prefix:
-            # Add prefix as start of assistant response
-            # The model will continue from here
-            messages.append({"role": "assistant", "content": prefix})
+        self._debug_log(
+            f"generate_with_prefix model={self._model} temp={temperature} "
+            f"max_tokens={max_tokens} prefix_len={len(prefix)} prompt_len={len(prompt)}"
+        )
 
-        # Generate continuation
-        response = self._client.chat(
+        response = self._client.generate(
             model=self._model,
-            messages=messages,
+            prompt=prompt_text,
+            stream=False,
             options={
                 "temperature": temperature,
                 "num_predict": max_tokens,
             },
         )
 
+        continuation = self._extract_text(response)
+        self._debug_log(
+            f"primary generate response_len={len(continuation)} "
+            f"meta={self._describe_response(response)} "
+            f"snippet={self._truncate(continuation)}"
+        )
+
+        # Some models (notably gpt-oss) can return an empty string when called
+        # via /api/generate with a prefill-style prompt. Fallback to chat with
+        # an explicit instruction if that happens. If chat is also empty, retry
+        # using a raw generate, then streaming generate which is more reliable on some builds.
+        if not continuation.strip():
+            # Try again with raw=True (bypass model template)
+            raw_response = self._client.generate(
+                model=self._model,
+                prompt=prompt_text,
+                stream=False,
+                raw=True,
+                options={
+                    "temperature": temperature,
+                    "num_predict": max_tokens,
+                },
+            )
+            continuation = self._extract_text(raw_response)
+            self._debug_log(
+                f"raw generate response_len={len(continuation)} "
+                f"meta={self._describe_response(raw_response)} "
+                f"snippet={self._truncate(continuation)}"
+            )
+            if continuation.strip():
+                response = raw_response
+
+        if not continuation.strip():
+            chat_prompt = (
+                "Answer the user's question. Start your reply with the exact prefix provided, "
+                "then continue normally.\n\n"
+                f"Question: {prompt}\n"
+                f"Prefix: {prefix}\n\n"
+                "Begin your answer now, starting with the prefix."
+            )
+            response = self._client.chat(
+                model=self._model,
+                messages=[{"role": "user", "content": chat_prompt}],
+                stream=False,
+                options={
+                    "temperature": temperature,
+                    "num_predict": max_tokens,
+                },
+            )
+            continuation = self._extract_text(response)
+            self._debug_log(
+                f"chat fallback response_len={len(continuation)} "
+                f"meta={self._describe_response(response)} "
+                f"snippet={self._truncate(continuation)}"
+            )
+
+            if not continuation.strip():
+                # Streaming generate fallback
+                continuation, response = self._stream_generate(
+                    prompt_text, temperature, max_tokens
+                )
+                self._debug_log(
+                    f"stream fallback response_len={len(continuation)} "
+                    f"snippet={self._truncate(continuation)}"
+                )
+
+            if not continuation.strip():
+                meta = self._describe_response(response)
+                raise RuntimeError(
+                    f"Model '{self._model}' returned an empty response for prompt "
+                    f"(last_response={meta}). Set PF_OLLAMA_DEBUG=1 and retry for diagnostics."
+                )
+
         generation_time_ms = int((time.time() - start_time) * 1000)
 
-        continuation = response["message"]["content"]
+        # If the model echoed the prefix, strip it so continuation_only is clean
+        continuation_only = continuation
+        if prefix and continuation.startswith(prefix):
+            continuation_only = continuation[len(prefix):].lstrip()
 
         # Full response = prefix + continuation
         # Add space between if prefix doesn't end with space and continuation doesn't start with space
-        if prefix and continuation:
-            if not prefix.endswith(" ") and not continuation.startswith(" "):
-                full_response = prefix + " " + continuation
+        if prefix and continuation_only:
+            if not prefix.endswith(" ") and not continuation_only.startswith(" "):
+                full_response = prefix + " " + continuation_only
             else:
-                full_response = prefix + continuation
+                full_response = prefix + continuation_only
         else:
-            full_response = prefix + continuation
+            full_response = prefix + continuation_only
+
+        input_tokens, output_tokens = self._get_token_counts(response)
 
         return GenerationResult(
             prefix=prefix,
-            continuation=continuation,
+            continuation=continuation_only,
             full_response=full_response,
-            input_tokens=response.get("prompt_eval_count", 0),
-            output_tokens=response.get("eval_count", 0),
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
             generation_time_ms=generation_time_ms,
             model=self._model,
             raw_response=response,
@@ -133,9 +334,14 @@ class OllamaProvider(LLMProvider):
             response=response,
         )
 
-        result = self._client.chat(
+        self._debug_log(
+            f"evaluate_response model={self._model} temp={temperature} prompt_len={len(eval_prompt)}"
+        )
+
+        result = self._client.generate(
             model=self._model,
-            messages=[{"role": "user", "content": eval_prompt}],
+            prompt=eval_prompt,
+            stream=False,
             options={
                 "temperature": temperature,
                 "num_predict": 500,
@@ -145,7 +351,11 @@ class OllamaProvider(LLMProvider):
 
         # Parse the JSON response
         try:
-            ratings = json.loads(result["message"]["content"])
+            ratings = json.loads(self._extract_text(result) or "")
+            self._debug_log(
+                f"evaluate_response parsed ratings keys={list(ratings.keys())} "
+                f"raw_snippet={self._truncate(self._extract_text(result))}"
+            )
             # Ensure all required fields are present
             required = [
                 "thoroughness", "accuracy", "insight", "clarity",
