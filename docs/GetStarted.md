@@ -6,14 +6,15 @@ This guide walks you through running the prefix framing experiment locally with 
 
 - Python 3.10+
 - [Ollama](https://ollama.ai) installed and running
-- A local model pulled (e.g., `llama3.2`, `mistral`, `qwen2.5`)
+- A local model pulled (e.g., `llama3.2`, `mistral`, `qwen3`, `gpt-oss`)
 
 ## Setup
 
 ```bash
 # Clone and install
 cd prefix_framing_experiment
-pip install -e .
+uv venv (if no virtual env already)
+uv sync
 
 # Start Ollama (in a separate terminal)
 ollama serve
