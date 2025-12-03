@@ -199,7 +199,9 @@ def plot_metric_by_category(
         x="prefix_category",
         y=metric,
         order=category_order,
+        hue="prefix_category",
         palette="Set2",
+        legend=False,
     )
 
     plt.title(f"{metric} by Prefix Category")
@@ -369,12 +371,15 @@ def generate_report(
             print(f"Saved boxplot for {metric}")
 
     # Effect size heatmap
-    if not effect_sizes.empty:
+    # Check that effect_sizes has data columns (not just 'category')
+    if not effect_sizes.empty and len(effect_sizes.columns) > 1:
         plot_effect_size_heatmap(
             effect_sizes,
             output_path=str(output_path / "effect_size_heatmap.png")
         )
         print("Saved effect size heatmap")
+    else:
+        print("Skipping effect size heatmap (no baseline 'control' category found or no effect sizes computed)")
 
     # Radar chart for judge ratings
     plot_judge_ratings_radar(
