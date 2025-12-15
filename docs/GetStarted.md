@@ -95,17 +95,6 @@ If an experiment is interrupted, resume it:
 python scripts/run_experiment.py --resume <experiment_id> --db results/experiment.db
 ```
 
-## Cost Estimation
-
-After running locally, the analysis shows estimated API costs:
-
-```
-Estimated API Costs:
-  Claude Sonnet: $12.50
-  Claude Opus:   $62.50
-  GPT-4o:        $15.00
-  GPT-4o-mini:   $0.60
-```
 
 ## Example Workflow
 

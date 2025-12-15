@@ -1,5 +1,5 @@
 metric,f_statistic,p_value,significant,group_means
-m_word_count,5.0668,0.025265,True,"{'emotional_negative': np.float64(313.82), 'emotional_positive': np.float64(382.73)}"
-m_hedge_word_count,0.1462,0.702522,False,"{'emotional_negative': np.float64(0.82), 'emotional_positive': np.float64(0.875)}"
-j_thoroughness,,,False,"{'emotional_negative': np.float64(4.0), 'emotional_positive': np.float64(4.0)}"
-j_engagement,,,False,"{'emotional_negative': np.float64(4.0), 'emotional_positive': np.float64(4.0)}"
+m_word_count,6.8399,3.1e-05,True,"{'cognitive': np.float64(452.48), 'control': np.float64(477.14), 'emotional_negative': np.float64(334.82), 'emotional_positive': np.float64(396.52), 'epistemic': np.float64(291.68)}"
+m_hedge_word_count,2.2096,0.068548,False,"{'cognitive': np.float64(1.06), 'control': np.float64(0.68), 'emotional_negative': np.float64(0.78), 'emotional_positive': np.float64(0.96), 'epistemic': np.float64(0.66)}"
+j_thoroughness,2.0134,0.093197,False,"{'cognitive': np.float64(4.0), 'control': np.float64(4.22), 'emotional_negative': np.float64(4.08), 'emotional_positive': np.float64(4.08), 'epistemic': np.float64(4.04)}"
+j_engagement,2.0134,0.093197,False,"{'cognitive': np.float64(4.0), 'control': np.float64(4.22), 'emotional_negative': np.float64(4.08), 'emotional_positive': np.float64(4.08), 'epistemic': np.float64(4.04)}"

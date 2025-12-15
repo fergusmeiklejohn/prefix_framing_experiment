@@ -11,8 +11,19 @@ from rich.table import Table
 
 from .data.prefixes import PREFIXES, get_prefix
 from .data.prompts import PROMPTS, get_prompt
+from .data.framings import FRAMINGS, BASE_QUESTIONS
 from .metrics import detect_course_correction, extract_metrics
-from .models import ExperimentConfig, JudgeRatings, Prefix, Prompt, Trial
+from .models import (
+    ExperimentConfig,
+    FramingCategory,
+    JudgeRatings,
+    PrefixCategory,
+    Prefix,
+    Prompt,
+    PromptFraming,
+    PromptType,
+    Trial,
+)
 from .providers.base import LLMProvider
 from .storage import ExperimentStorage
 
@@ -98,6 +109,150 @@ class ExperimentRunner:
         trial.metrics = extract_metrics(result.full_response)
 
         return trial
+
+    def generate_framing_trial(
+        self,
+        base_question: str,
+        framing: PromptFraming,
+        replication: int,
+    ) -> Trial:
+        """Generate a single trial for the framing study."""
+        # Apply framing to question
+        framed_prompt = framing.apply(base_question)
+
+        # Generate response without prefix forcing (natural response)
+        result = self.provider.generate(
+            prompt=framed_prompt,
+            temperature=self.config.temperature,
+            max_tokens=self.config.max_tokens,
+        )
+
+        # Create trial object
+        # Use framing_id as prompt_id for compatibility with analysis
+        trial = Trial(
+            timestamp=datetime.now(),
+            model=self.config.model,
+            prompt_id=f"{framing.id}_{hash(base_question) % 10000}",
+            prompt_text=framed_prompt,
+            prompt_type=PromptType.FACTUAL,  # Default; could infer from question
+            prefix_id="none",
+            prefix_text="",
+            prefix_category=PrefixCategory.CONTROL,
+            replication=replication,
+            temperature=self.config.temperature,
+            full_response=result.full_response,
+            continuation_only=result.full_response,  # No prefix, so same as full
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+            generation_time_ms=result.generation_time_ms,
+            course_corrected=False,
+            # Framing-specific fields
+            framing_id=framing.id,
+            framing_category=framing.category,
+            base_question=base_question,
+        )
+
+        # Extract metrics
+        trial.metrics = extract_metrics(result.full_response)
+
+        return trial
+
+    def run_framing_study(
+        self,
+        questions: list[str] = None,
+        framings: list[PromptFraming] = None,
+        run_evaluations: bool = True,
+        shuffle: bool = True,
+        callback: Optional[Callable[[Trial, int, int], None]] = None,
+    ) -> str:
+        """
+        Run the prompt-side framing study.
+
+        Args:
+            questions: Base questions to use (defaults to BASE_QUESTIONS)
+            framings: Framings to apply (defaults to FRAMINGS)
+            run_evaluations: Whether to run LLM-as-judge evaluations
+            shuffle: Whether to randomize trial order
+            callback: Optional callback(trial, current, total) after each trial
+
+        Returns:
+            experiment_id
+        """
+        questions = questions or BASE_QUESTIONS
+        framings = framings or FRAMINGS
+
+        # Save experiment config
+        experiment_id = self.storage.save_experiment(self.config)
+
+        replications = range(1, self.config.replications + 1)
+
+        # Generate all conditions
+        conditions = list(itertools.product(questions, framings, replications))
+        total_conditions = len(conditions)
+
+        # Check for already completed conditions (for resuming)
+        completed = self.storage.get_completed_framing_conditions(experiment_id)
+        conditions = [
+            (q, f, r) for q, f, r in conditions
+            if (q, f.id, r) not in completed
+        ]
+
+        if shuffle:
+            random.shuffle(conditions)
+
+        remaining = len(conditions)
+        console.print(f"\n[bold]Starting framing study: {self.config.name}[/bold]")
+        console.print(f"Model: {self.config.model}")
+        console.print(f"Questions: {len(questions)}")
+        console.print(f"Framings: {[f.id for f in framings]}")
+        console.print(f"Replications: {self.config.replications}")
+        console.print(f"Total conditions: {total_conditions}")
+        console.print(f"Already completed: {total_conditions - remaining}")
+        console.print(f"Remaining: {remaining}")
+        console.print()
+
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            BarColumn(),
+            TaskProgressColumn(),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Running framing trials...", total=remaining)
+
+            for i, (question, framing, replication) in enumerate(conditions):
+                try:
+                    # Generate trial
+                    trial = self.generate_framing_trial(question, framing, replication)
+
+                    # Run evaluation if requested
+                    if run_evaluations:
+                        trial.judge_ratings = self.evaluate_trial(trial)
+
+                    # Save trial
+                    self.storage.save_trial(experiment_id, trial)
+
+                    # Callback
+                    if callback:
+                        callback(trial, i + 1, remaining)
+
+                except Exception as e:
+                    console.print(
+                        f"[red]Error in trial {framing.id}/{replication}: {e}[/red]"
+                    )
+                    # Continue with next trial
+
+                progress.update(task, advance=1)
+
+        # Update end time
+        self.storage.update_experiment_end_time(experiment_id)
+
+        # Print summary
+        summary = self.storage.get_experiment_summary(experiment_id)
+        if summary:
+            self._print_summary(summary)
+
+        return experiment_id
 
     def evaluate_trial(self, trial: Trial) -> JudgeRatings:
         """Evaluate a trial using LLM-as-judge."""
@@ -305,3 +460,58 @@ def run_pilot(
     )
 
     return runner.run(run_evaluations=run_evaluations)
+
+
+def run_framing_study(
+    model: str = "llama3.2",
+    questions: list[str] = None,
+    replications: int = 30,
+    db_path: str = "results/framing_study.db",
+    run_evaluations: bool = True,
+) -> str:
+    """
+    Run the prompt-side framing study.
+
+    Tests whether user engagement framing affects response quality.
+
+    Args:
+        model: Ollama model name
+        questions: Base questions to use (defaults to BASE_QUESTIONS)
+        replications: Replications per condition
+        db_path: Path to database file
+        run_evaluations: Whether to run LLM-as-judge
+
+    Returns:
+        experiment_id
+    """
+    from .providers.ollama import OllamaProvider
+
+    questions = questions or BASE_QUESTIONS
+
+    console.print("\n[bold]Prompt-Side Framing Study[/bold]")
+    console.print(f"Testing whether user engagement framing affects response quality\n")
+    console.print(f"Framings: {[f.id for f in FRAMINGS]}")
+    console.print(f"Questions: {len(questions)}")
+    console.print(f"Replications: {replications}")
+    console.print(f"Total trials: {len(questions) * len(FRAMINGS) * replications}")
+
+    config = ExperimentConfig(
+        name="Framing Study",
+        model=model,
+        judge_model=model,
+        replications=replications,
+    )
+
+    provider = OllamaProvider(model=model)
+    storage = ExperimentStorage(db_path=db_path)
+
+    runner = ExperimentRunner(
+        provider=provider,
+        storage=storage,
+        config=config,
+    )
+
+    return runner.run_framing_study(
+        questions=questions,
+        run_evaluations=run_evaluations,
+    )

@@ -10,6 +10,7 @@ from .models import (
     AutomatedMetrics,
     ExperimentConfig,
     ExperimentSummary,
+    FramingCategory,
     JudgeRatings,
     PrefixCategory,
     PromptType,
@@ -66,6 +67,9 @@ class ExperimentStorage:
                     course_corrected INTEGER DEFAULT 0,
                     metrics_json TEXT,
                     judge_ratings_json TEXT,
+                    framing_id TEXT,
+                    framing_category TEXT,
+                    base_question TEXT,
                     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (experiment_id) REFERENCES experiments(experiment_id)
                 );
@@ -74,7 +78,23 @@ class ExperimentStorage:
                 CREATE INDEX IF NOT EXISTS idx_trials_prompt ON trials(prompt_id);
                 CREATE INDEX IF NOT EXISTS idx_trials_prefix ON trials(prefix_id);
                 CREATE INDEX IF NOT EXISTS idx_trials_replication ON trials(replication);
+                CREATE INDEX IF NOT EXISTS idx_trials_framing ON trials(framing_id);
             """)
+            # Migrate existing databases - add framing columns if they don't exist
+            self._migrate_add_framing_columns(conn)
+
+    def _migrate_add_framing_columns(self, conn: sqlite3.Connection):
+        """Add framing columns to existing databases that don't have them."""
+        # Check if framing_id column exists
+        cursor = conn.execute("PRAGMA table_info(trials)")
+        columns = {row[1] for row in cursor.fetchall()}
+
+        if "framing_id" not in columns:
+            conn.execute("ALTER TABLE trials ADD COLUMN framing_id TEXT")
+        if "framing_category" not in columns:
+            conn.execute("ALTER TABLE trials ADD COLUMN framing_category TEXT")
+        if "base_question" not in columns:
+            conn.execute("ALTER TABLE trials ADD COLUMN base_question TEXT")
 
     def save_experiment(self, config: ExperimentConfig) -> str:
         """Save experiment configuration, return experiment_id."""
@@ -114,8 +134,9 @@ class ExperimentStorage:
                     replication, temperature,
                     full_response, continuation_only,
                     input_tokens, output_tokens, generation_time_ms,
-                    course_corrected, metrics_json, judge_ratings_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    course_corrected, metrics_json, judge_ratings_json,
+                    framing_id, framing_category, base_question
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     trial.trial_id,
@@ -138,6 +159,9 @@ class ExperimentStorage:
                     1 if trial.course_corrected else 0,
                     trial.metrics.model_dump_json() if trial.metrics else None,
                     trial.judge_ratings.model_dump_json() if trial.judge_ratings else None,
+                    trial.framing_id,
+                    trial.framing_category.value if trial.framing_category else None,
+                    trial.base_question,
                 ),
             )
 
@@ -199,6 +223,20 @@ class ExperimentStorage:
                 (experiment_id,),
             ).fetchall()
             return {(r["prompt_id"], r["prefix_id"], r["replication"]) for r in rows}
+
+    def get_completed_framing_conditions(
+        self, experiment_id: str
+    ) -> set[tuple[str, str, int]]:
+        """Get set of (base_question, framing_id, replication) that are completed."""
+        with self._get_conn() as conn:
+            rows = conn.execute(
+                """
+                SELECT base_question, framing_id, replication
+                FROM trials WHERE experiment_id = ? AND framing_id IS NOT NULL
+                """,
+                (experiment_id,),
+            ).fetchall()
+            return {(r["base_question"], r["framing_id"], r["replication"]) for r in rows}
 
     def get_experiment_summary(self, experiment_id: str) -> Optional[ExperimentSummary]:
         """Get summary statistics for an experiment."""
@@ -265,6 +303,11 @@ class ExperimentStorage:
         if row["judge_ratings_json"]:
             ratings = JudgeRatings.model_validate_json(row["judge_ratings_json"])
 
+        # Handle framing fields (may be None for older data)
+        framing_category = None
+        if row["framing_category"]:
+            framing_category = FramingCategory(row["framing_category"])
+
         return Trial(
             trial_id=row["trial_id"],
             timestamp=datetime.fromisoformat(row["timestamp"]),
@@ -285,6 +328,9 @@ class ExperimentStorage:
             course_corrected=bool(row["course_corrected"]),
             metrics=metrics,
             judge_ratings=ratings,
+            framing_id=row["framing_id"],
+            framing_category=framing_category,
+            base_question=row["base_question"],
         )
 
     def export_to_json(self, experiment_id: str, output_path: str | Path):

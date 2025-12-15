@@ -9,7 +9,7 @@ import pandas as pd
 import seaborn as sns
 from scipy import stats
 
-from .models import PrefixCategory, PromptType
+from .models import FramingCategory, PrefixCategory, PromptType
 from .storage import ExperimentStorage
 
 
@@ -41,6 +41,10 @@ def trials_to_dataframe(storage: ExperimentStorage, experiment_id: str) -> pd.Da
             "output_tokens": trial.output_tokens,
             "generation_time_ms": trial.generation_time_ms,
             "course_corrected": trial.course_corrected,
+            # Framing study fields
+            "framing_id": trial.framing_id,
+            "framing_category": trial.framing_category.value if trial.framing_category else None,
+            "base_question": trial.base_question,
         }
 
         # Add metrics
@@ -441,4 +445,238 @@ def generate_report(
     df.to_csv(output_path / "full_data.csv", index=False)
     print(f"Saved full data to {output_path / 'full_data.csv'}")
 
+    print(f"\nAnalysis complete! Results in {output_path}")
+
+
+# ============================================================================
+# Framing Study Analysis Functions
+# ============================================================================
+
+
+def compute_framing_effect_sizes(
+    df: pd.DataFrame,
+    baseline_category: str = "neutral",
+    metric_cols: Optional[list[str]] = None,
+) -> pd.DataFrame:
+    """
+    Compute Cohen's d effect sizes comparing each framing to baseline (neutral).
+
+    Args:
+        df: Trial DataFrame with framing_category column
+        baseline_category: Category to use as baseline (default: neutral)
+        metric_cols: Columns to compute effect sizes for (default: all metrics)
+
+    Returns:
+        DataFrame with effect sizes
+    """
+    if "framing_category" not in df.columns or df["framing_category"].isna().all():
+        print("[WARNING] No framing_category data found. Is this a framing study?")
+        return pd.DataFrame(columns=["category"])
+
+    if metric_cols is None:
+        metric_cols = [c for c in df.columns if c.startswith("m_") or c.startswith("j_")]
+
+    categories = df["framing_category"].dropna().unique()
+
+    if baseline_category not in categories:
+        print(f"\n[WARNING] No '{baseline_category}' framing found in data!")
+        print(f"  Available framings: {list(categories)}")
+        return pd.DataFrame(columns=["category"])
+
+    baseline = df[df["framing_category"] == baseline_category]
+
+    if len(baseline) < 2:
+        print(f"\n[WARNING] Baseline framing '{baseline_category}' has only {len(baseline)} trial(s).")
+        return pd.DataFrame(columns=["category"])
+
+    results = []
+    for category in categories:
+        if category == baseline_category:
+            continue
+
+        treatment = df[df["framing_category"] == category]
+
+        row = {"category": category}
+        for col in metric_cols:
+            if col in baseline.columns and col in treatment.columns:
+                baseline_vals = baseline[col].dropna()
+                treatment_vals = treatment[col].dropna()
+
+                if len(baseline_vals) > 1 and len(treatment_vals) > 1:
+                    pooled_std = np.sqrt(
+                        ((len(baseline_vals) - 1) * baseline_vals.std() ** 2 +
+                         (len(treatment_vals) - 1) * treatment_vals.std() ** 2) /
+                        (len(baseline_vals) + len(treatment_vals) - 2)
+                    )
+                    if pooled_std > 0:
+                        d = (treatment_vals.mean() - baseline_vals.mean()) / pooled_std
+                    else:
+                        d = 0
+                    row[col] = round(d, 3)
+
+        results.append(row)
+
+    return pd.DataFrame(results)
+
+
+def plot_metric_by_framing(
+    df: pd.DataFrame,
+    metric: str,
+    output_path: Optional[str] = None,
+    figsize: tuple = (10, 6),
+):
+    """
+    Create a box plot of a metric by framing category.
+
+    Args:
+        df: Trial DataFrame with framing_category
+        metric: Metric column to plot
+        output_path: Optional path to save figure
+        figsize: Figure size
+    """
+    if "framing_category" not in df.columns or df["framing_category"].isna().all():
+        print("No framing_category data found")
+        return
+
+    plt.figure(figsize=figsize)
+
+    # Order categories in predicted quality order
+    category_order = ["enthusiastic", "neutral", "rushed", "dismissive"]
+    category_order = [c for c in category_order if c in df["framing_category"].unique()]
+
+    sns.boxplot(
+        data=df,
+        x="framing_category",
+        y=metric,
+        order=category_order,
+        hue="framing_category",
+        palette="coolwarm",
+        legend=False,
+    )
+
+    plt.title(f"{metric} by User Framing")
+    plt.xlabel("User Framing Category")
+    plt.ylabel(metric)
+    plt.xticks(rotation=45, ha="right")
+    plt.tight_layout()
+
+    if output_path:
+        plt.savefig(output_path, dpi=150, bbox_inches="tight")
+    else:
+        plt.show()
+
+    plt.close()
+
+
+def generate_framing_report(
+    storage: ExperimentStorage,
+    experiment_id: str,
+    output_dir: str = "results/framing_analysis",
+):
+    """
+    Generate analysis report for a framing study.
+
+    Args:
+        storage: Experiment storage
+        experiment_id: Experiment to analyze
+        output_dir: Directory for output files
+    """
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Load data
+    df = trials_to_dataframe(storage, experiment_id)
+
+    if df.empty:
+        print("No trials found for experiment")
+        return
+
+    # Check if this is a framing study
+    if df["framing_category"].isna().all():
+        print("This doesn't appear to be a framing study (no framing_category data)")
+        print("Use generate_report() for prefix studies instead")
+        return
+
+    print(f"Loaded {len(df)} framing study trials")
+
+    # Show framing distribution
+    categories = df["framing_category"].dropna().unique()
+    print(f"Framing categories: {list(categories)}")
+    print(f"Trials per framing:")
+    print(df["framing_category"].value_counts())
+
+    # Summary stats by framing
+    summary = compute_summary_stats(df, group_by="framing_category")
+    summary.to_csv(output_path / "framing_summary_stats.csv")
+    print(f"\nSaved summary stats to {output_path / 'framing_summary_stats.csv'}")
+
+    # Effect sizes vs neutral
+    effect_sizes = compute_framing_effect_sizes(df)
+    effect_sizes.to_csv(output_path / "framing_effect_sizes.csv", index=False)
+    print(f"Saved effect sizes to {output_path / 'framing_effect_sizes.csv'}")
+
+    # ANOVA for key metrics
+    key_metrics = ["m_word_count", "m_hedge_word_count", "j_thoroughness", "j_engagement"]
+    available_metrics = [m for m in key_metrics if m in df.columns]
+
+    anova_results = []
+    for metric in available_metrics:
+        result = run_anova(df, metric, group_col="framing_category")
+        anova_results.append(result)
+        print(f"ANOVA for {metric}: F={result.get('f_statistic', 'N/A')}, p={result.get('p_value', 'N/A')}")
+
+    pd.DataFrame(anova_results).to_csv(output_path / "framing_anova_results.csv", index=False)
+
+    # Generate plots
+    for metric in ["m_word_count", "m_hedge_word_count"]:
+        if metric in df.columns:
+            plot_metric_by_framing(
+                df, metric,
+                output_path=str(output_path / f"framing_boxplot_{metric}.png")
+            )
+            print(f"Saved boxplot for {metric}")
+
+    # Effect size heatmap
+    if not effect_sizes.empty and len(effect_sizes.columns) > 1:
+        plot_effect_size_heatmap(
+            effect_sizes,
+            output_path=str(output_path / "framing_effect_size_heatmap.png")
+        )
+        print("Saved effect size heatmap")
+
+    # Radar chart for judge ratings
+    if any(c.startswith("j_") for c in df.columns):
+        # Temporarily rename framing_category to prefix_category for the existing radar function
+        df_radar = df.copy()
+        df_radar["prefix_category"] = df_radar["framing_category"]
+        plot_judge_ratings_radar(
+            df_radar,
+            output_path=str(output_path / "framing_judge_ratings_radar.png")
+        )
+        print("Saved judge ratings radar chart")
+
+    # Export full data
+    df.to_csv(output_path / "framing_full_data.csv", index=False)
+    print(f"Saved full data to {output_path / 'framing_full_data.csv'}")
+
+    # Print key findings summary
+    print("\n" + "=" * 60)
+    print("KEY FINDINGS SUMMARY")
+    print("=" * 60)
+
+    # Compare means across framings
+    if "m_word_count" in df.columns:
+        means = df.groupby("framing_category")["m_word_count"].mean()
+        print(f"\nMean word count by framing:")
+        for cat in ["enthusiastic", "neutral", "rushed", "dismissive"]:
+            if cat in means.index:
+                print(f"  {cat}: {means[cat]:.1f}")
+
+    if available_metrics:
+        print(f"\nSignificant ANOVA results (p < 0.05):")
+        for result in anova_results:
+            if result.get("significant"):
+                print(f"  {result['metric']}: F={result['f_statistic']}, p={result['p_value']}")
+
+    print("=" * 60)
     print(f"\nAnalysis complete! Results in {output_path}")

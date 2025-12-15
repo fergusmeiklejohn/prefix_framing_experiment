@@ -54,7 +54,35 @@ class OllamaProvider(LLMProvider):
         try:
             self._client.show(model)
         except ollama.ResponseError:
-            available = [m["name"] for m in self._client.list()["models"]]
+            # Handle different ollama API response structures
+            try:
+                list_response = self._client.list()
+                # Could be dict with "models" key or object with models attribute
+                if isinstance(list_response, dict):
+                    models_list = list_response.get("models", [])
+                else:
+                    models_list = getattr(list_response, "models", [])
+
+                # Extract model names - handle both dict and object formats
+                available = []
+                for m in models_list:
+                    if isinstance(m, dict):
+                        name = m.get("name") or m.get("model") or str(m)
+                    else:
+                        name = getattr(m, "name", None) or getattr(m, "model", None) or str(m)
+                    available.append(name)
+
+                # Try to find a matching model with a tag (e.g., "gpt-oss" -> "gpt-oss:20b")
+                matching = [m for m in available if m.startswith(model + ":") or m == model]
+                if matching:
+                    # Use the first matching model
+                    self._model = matching[0]
+                    print(f"Note: Using '{self._model}' (matched from '{model}')")
+                    return  # Successfully found a match
+
+            except Exception:
+                available = ["(unable to list models)"]
+
             raise ValueError(
                 f"Model '{model}' not found. Available models: {available}. "
                 f"Pull it with: ollama pull {model}"
@@ -185,6 +213,71 @@ class OllamaProvider(LLMProvider):
     @property
     def model_name(self) -> str:
         return self._model
+
+    def generate(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+    ) -> GenerationResult:
+        """
+        Generate a natural response to a prompt (no prefix forcing).
+
+        Uses chat API for natural conversational responses.
+        """
+        start_time = time.time()
+
+        self._debug_log(
+            f"generate model={self._model} temp={temperature} "
+            f"max_tokens={max_tokens} prompt_len={len(prompt)}"
+        )
+
+        # Use chat API for natural response
+        response = self._client.chat(
+            model=self._model,
+            messages=[{"role": "user", "content": prompt}],
+            stream=False,
+            options={
+                "temperature": temperature,
+                "num_predict": max_tokens,
+            },
+        )
+
+        text = self._extract_text(response)
+        self._debug_log(
+            f"generate response_len={len(text)} "
+            f"meta={self._describe_response(response)} "
+            f"snippet={self._truncate(text)}"
+        )
+
+        # Fallback to streaming if empty
+        if not text.strip():
+            text, response = self._stream_generate(prompt, temperature, max_tokens)
+            self._debug_log(
+                f"generate stream fallback response_len={len(text)} "
+                f"snippet={self._truncate(text)}"
+            )
+
+        if not text.strip():
+            meta = self._describe_response(response)
+            raise RuntimeError(
+                f"Model '{self._model}' returned an empty response for prompt "
+                f"(last_response={meta}). Set PF_OLLAMA_DEBUG=1 and retry for diagnostics."
+            )
+
+        generation_time_ms = int((time.time() - start_time) * 1000)
+        input_tokens, output_tokens = self._get_token_counts(response)
+
+        return GenerationResult(
+            prefix="",
+            continuation=text,
+            full_response=text,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            generation_time_ms=generation_time_ms,
+            model=self._model,
+            raw_response=response,
+        )
 
     def generate_with_prefix(
         self,

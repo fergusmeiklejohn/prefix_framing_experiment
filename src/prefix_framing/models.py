@@ -25,6 +25,14 @@ class PrefixCategory(str, Enum):
     CONTROL = "control"
 
 
+class FramingCategory(str, Enum):
+    """Categories of user prompt framings for the framing study."""
+    ENTHUSIASTIC = "enthusiastic"
+    NEUTRAL = "neutral"
+    RUSHED = "rushed"
+    DISMISSIVE = "dismissive"
+
+
 class Prompt(BaseModel):
     """A prompt/question used in the experiment."""
     id: str
@@ -37,6 +45,17 @@ class Prefix(BaseModel):
     id: str
     category: PrefixCategory
     text: str
+
+
+class PromptFraming(BaseModel):
+    """A user prompt framing for the framing study."""
+    id: str
+    category: FramingCategory
+    template: str  # Template with {question} placeholder
+
+    def apply(self, question: str) -> str:
+        """Apply this framing to a question."""
+        return self.template.format(question=question)
 
 
 class AutomatedMetrics(BaseModel):
@@ -98,6 +117,11 @@ class Trial(BaseModel):
     prefix_category: PrefixCategory
     replication: int
     temperature: float
+
+    # Framing study fields (optional - used for prompt-side framing study)
+    framing_id: Optional[str] = None
+    framing_category: Optional[FramingCategory] = None
+    base_question: Optional[str] = None  # Original question before framing applied
 
     # Generation results
     full_response: str = ""

@@ -22,6 +22,26 @@ class LLMProvider(ABC):
     """Abstract base class for LLM providers."""
 
     @abstractmethod
+    def generate(
+        self,
+        prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 2000,
+    ) -> GenerationResult:
+        """
+        Generate a natural response to a prompt (no prefix forcing).
+
+        Args:
+            prompt: The user's question/prompt
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens to generate
+
+        Returns:
+            GenerationResult with the full response and metadata
+        """
+        pass
+
+    @abstractmethod
     def generate_with_prefix(
         self,
         prompt: str,

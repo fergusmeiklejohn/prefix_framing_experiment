@@ -1,3 +1,5 @@
-category
-emotional_negative
-emotional_positive
+category,m_char_count,m_word_count,m_sentence_count,m_paragraph_count,m_list_item_count,m_question_count,m_avg_word_length,m_avg_sentence_length,m_type_token_ratio,m_flesch_reading_ease,m_flesch_kincaid_grade,m_hedge_word_count,m_certainty_marker_count,m_first_person_hedge_count,m_example_count,m_caveat_count,m_citation_like_count,m_exclamation_count,m_intensifier_count,j_thoroughness,j_accuracy,j_insight,j_clarity,j_engagement,j_nuance,j_usefulness
+epistemic,-0.784,-0.829,-0.867,-0.913,-0.776,-0.271,0.093,0.809,1.317,-0.049,0.401,-0.026,-0.25,0,0.694,-0.381,0.0,-0.2,-0.249,-0.346,-0.338,-0.29,-0.338,-0.346,-0.3,-0.338
+cognitive,-0.065,-0.105,-0.326,-0.353,-0.123,0.044,0.183,0.586,0.216,-0.14,0.474,0.451,0.028,0,0.605,0.218,0.078,-0.2,0.115,-0.458,-0.467,-0.388,-0.467,-0.458,-0.427,-0.467
+emotional_positive,-0.311,-0.337,-0.448,-0.586,-0.366,-0.271,-0.047,0.587,0.513,0.037,0.229,0.312,-0.25,0,0.835,-0.147,-0.203,-0.2,2.237,-0.252,-0.234,-0.205,-0.234,-0.252,-0.198,-0.234
+emotional_negative,-0.601,-0.6,-0.65,-0.548,-0.485,-0.067,-0.32,0.578,0.911,0.253,0.065,0.124,-0.308,0,0.498,-0.115,-0.203,-0.2,-0.046,-0.252,-0.234,-0.434,-0.234,-0.252,-0.252,-0.234
