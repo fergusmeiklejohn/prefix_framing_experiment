@@ -1,0 +1,4 @@
+category,m_char_count,m_word_count,m_sentence_count,m_paragraph_count,m_list_item_count,m_question_count,m_avg_word_length,m_avg_sentence_length,m_type_token_ratio,m_flesch_reading_ease,m_flesch_kincaid_grade,m_hedge_word_count,m_certainty_marker_count,m_first_person_hedge_count,m_example_count,m_caveat_count,m_citation_like_count,m_exclamation_count,m_intensifier_count,j_thoroughness,j_accuracy,j_insight,j_clarity,j_engagement,j_nuance,j_usefulness
+dismissive,-0.423,-0.393,-0.142,-0.29,-0.16,-0.038,-0.242,-0.258,0.258,0.436,-0.369,-0.107,-0.156,-0.067,-0.305,-0.108,0.0,0.153,0.02,0.459,0.492,0.424,0.441,0.438,0.436,0.437
+rushed,-2.005,-1.965,-1.315,-1.523,-1.147,-0.156,-0.2,0.072,1.35,0.322,-0.165,-0.2,-0.524,0.0,-0.478,-0.561,-0.19,0.035,-0.02,0.722,0.771,0.545,0.734,0.655,0.612,0.731
+enthusiastic,-0.018,0.027,0.201,0.102,0.174,0.041,-0.358,-0.331,0.118,0.577,-0.504,0.085,-0.061,0.0,-0.076,0.026,-0.274,0.367,0.12,0.397,0.387,0.39,0.361,0.366,0.375,0.357

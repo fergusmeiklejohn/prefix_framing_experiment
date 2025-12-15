@@ -1,0 +1,5 @@
+metric,f_statistic,p_value,significant,group_means
+m_word_count,147.2411,0.0,True,"{'dismissive': np.float64(893.6), 'enthusiastic': np.float64(980.973), 'neutral': np.float64(975.707), 'rushed': np.float64(539.56)}"
+m_hedge_word_count,2.4076,0.066214,False,"{'dismissive': np.float64(1.293), 'enthusiastic': np.float64(1.527), 'neutral': np.float64(1.42), 'rushed': np.float64(1.18)}"
+j_thoroughness,10.2993,1e-06,True,"{'dismissive': np.float64(4.527), 'enthusiastic': np.float64(4.453), 'neutral': np.float64(4.14), 'rushed': np.float64(4.72)}"
+j_engagement,8.8602,9e-06,True,"{'dismissive': np.float64(4.547), 'enthusiastic': np.float64(4.48), 'neutral': np.float64(4.167), 'rushed': np.float64(4.713)}"
